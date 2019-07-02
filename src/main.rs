@@ -20,6 +20,16 @@ struct Opt {
     /// Number of shapes used in approximation of input image.
     #[structopt(short = "n", long)]
     num_shapes: u64,
+
+    /// Number of starting shapes used when attempting to add
+    /// the next shape to the approximation.
+    #[structopt(short = "s", long, default_value = "1000")]
+    num_samples: u64,
+
+    /// Number of attempts made to improve each random sample
+    /// via mutation before giving up.
+    #[structopt(short = "a", long, default_value = "10")]
+    num_attempts: u64,
 }
 
 // TODO
@@ -45,8 +55,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let background = average_image_colour(&image);
     let mut current_image = RgbImage::from_pixel(width, height, background);
 
-    let num_samples = 1000;
-
     // Totally deterministic for now.
     let mut rng = StdRng::seed_from_u64(1);
 
@@ -56,12 +64,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut best_candidate = current_image.clone();
         let mut least_error = std::u64::MAX;
 
-        for _ in 0..num_samples {
+        for _ in 0..opt.num_samples {
             let rect = Rect::generate_random(&mut rng, width, height);
-            let rect_colour = average_colour_within_rect(&image, &rect);
-            let candidate = draw_rect(&current_image, &rect, rect_colour);
+            let (error, candidate) = hill_climb(
+                &mut rng,
+                &image,
+                &current_image,
+                opt.num_attempts,
+                rect);
 
-            let error = sum_squared_errors(&image, &candidate);
             if error < least_error {
                 least_error = error;
                 best_candidate = candidate;
@@ -74,6 +85,44 @@ fn main() -> Result<(), Box<dyn Error>> {
     current_image.save(&opt.output)?;
 
     Ok(())
+}
+
+/// Returns (least error, image with best rect added)
+fn hill_climb<R: Rng>(
+    rng: &mut R,
+    target: &RgbImage,
+    current: &RgbImage,
+    num_attempts: u64,
+    start: Rect
+) -> (u64, RgbImage)
+{
+    let (width, height) = target.dimensions();
+    let mut attempts = 0;
+
+    let rect_colour = average_colour_within_rect(&target, &start);
+    let candidate = draw_rect(&current, &start, rect_colour);
+
+    let mut least_error = sum_squared_errors(&target, &candidate);
+    let mut best_candidate = candidate;
+    let mut best_rect = start;
+
+    while attempts < num_attempts {
+        let mutated = best_rect.mutate(rng, width, height);
+        let rect_colour = average_colour_within_rect(&target, &mutated);
+        let candidate = draw_rect(&current, &mutated, rect_colour);
+        let error = sum_squared_errors(&target, &candidate);
+
+        if error < least_error {
+            attempts = 0;
+            least_error = error;
+            best_rect = mutated;
+            best_candidate = candidate;
+        } else {
+            attempts += 1;
+        }
+    }
+
+    (least_error, best_candidate)
 }
 
 fn draw_rect(image: &RgbImage, rect: &Rect, colour: Rgb<u8>) -> RgbImage {
@@ -92,6 +141,58 @@ fn draw_rect(image: &RgbImage, rect: &Rect, colour: Rgb<u8>) -> RgbImage {
     result
 }
 
+trait Mutate {
+    fn mutate<R: Rng>(
+        &self,
+        rng: &mut R,
+        image_width: u32,
+        image_height: u32
+    ) -> Self;
+}
+
+impl Mutate for Rect {
+    fn mutate<R: Rng>(
+        &self,
+        rng: &mut R,
+        image_width: u32,
+        image_height: u32
+    ) -> Self {
+        let choice = rng.gen_range(0, 2);
+        let (c1, c2): (i32, i32) = (
+            rng.gen_range(-10, 10),
+            rng.gen_range(-10, 10)
+        );
+        let (left, top, width, height) = if choice == 0 {
+            (
+                self.left as i32 + c1,
+                self.top as i32 + c2,
+                self.width as i32,
+                self.height as i32
+            )
+        } else {
+            (
+                self.left as i32,
+                self.top as i32,
+                self.width as i32 + c1,
+                self.height as i32 + c2
+            )
+        };
+
+        let (w, h) = (image_width as i32, image_height as i32);
+
+        let left = clamp(left, 0, w - 2) as u32;
+        let top = clamp(top, 0, h - 2) as u32;
+        let width = clamp(width, 1, w - left as i32 - 1) as u32;
+        let height = clamp(height, 1, h - top as i32 - 1) as u32;
+
+        Rect { left, top, width, height }
+    }
+}
+
+fn clamp(x: i32, min: i32, max: i32) -> i32 {
+    if x < min { min } else if x > max { max } else { x }
+}
+
 trait Random {
     fn generate_random<R: Rng>(rng: &mut R, image_width: u32, image_height: u32) -> Self;
 }
@@ -108,8 +209,8 @@ impl Random for Rect {
         // 2. they generate uniformly in full range and then clamp
         let left = rng.gen_range(0, image_width - 1);
         let top = rng.gen_range(0, image_height - 1);
-        let width = rng.gen_range(0, image_width - left - 1);
-        let height = rng.gen_range(0, image_width - top - 1);
+        let width = rng.gen_range(1, image_width - left);
+        let height = rng.gen_range(1, image_width - top);
 
         Rect { left, top, width, height }
     }
