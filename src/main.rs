@@ -83,8 +83,8 @@ fn draw_rect(image: &RgbImage, rect: &Rect, colour: Rgb<u8>) -> RgbImage {
     // We could also replace a load of code here by using functions
     // from image or imageproc.
     let mut result = image.clone();
-    for y in rect.top..(rect.top + rect.height) - 1 {
-        for x in rect.left..(rect.left + rect.width) - 1 {
+    for y in rect.top..(rect.top + rect.height) {
+        for x in rect.left..(rect.left + rect.width) {
             result.put_pixel(x, y, colour);
         }
     }
@@ -108,8 +108,8 @@ impl Random for Rect {
         // 2. they generate uniformly in full range and then clamp
         let left = rng.gen_range(0, image_width - 1);
         let top = rng.gen_range(0, image_height - 1);
-        let width = rng.gen_range(0, image_width - left);
-        let height = rng.gen_range(0, image_width - top);
+        let width = rng.gen_range(0, image_width - left - 1);
+        let height = rng.gen_range(0, image_width - top - 1);
 
         Rect { left, top, width, height }
     }
