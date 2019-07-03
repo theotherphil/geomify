@@ -43,6 +43,10 @@ struct Opt {
     #[structopt(short = "a", long, default_value = "10")]
     num_attempts: u64,
 
+    /// Whether to disable the use of multiple hteads.
+    #[structopt(short = "d", long)]
+    disable_parallelism: bool,
+
     /// Verbosity of logging.
     #[structopt(short = "v", parse(from_occurrences))]
     verbosity: u64,
@@ -107,46 +111,72 @@ fn main() -> Result<(), Box<dyn Error>> {
             &Rect::at(0, 0).of_size(target.width(), target.height())
         ).iter().sum();
 
-        let best = Mutex::new(
-            (
-                Rect::at(0, 0).of_size(1, 1),
-                Rgb([0, 0, 0]),
-                std::u64::MAX
-            )
-        );
+        let best = Mutex::new(Sample::default());
 
-        (0..opt.num_samples).into_par_iter()
-            .for_each(|s| {
-                debug!("Sample: {}", s);
+        if opt.disable_parallelism {
+            (0..opt.num_samples)
+                .for_each(|s| {
+                    debug!("Sample: {}", s);
 
-                let mut rng = thread_rng();
+                    let sample = sample(
+                        &target,
+                        &target_integral,
+                        opt.num_attempts,
+                        current_error,
+                        &current_diff_integral_squared
+                    );
 
-                let rect = Rect::generate_random(&mut rng, width, height);
-                let (error, rect, colour) = hill_climb(
-                    &mut rng,
-                    &target,
-                    &target_integral,
-                    opt.num_attempts,
-                    rect,
-                    current_error,
-                    &current_diff_integral_squared
-                );
+                    let mut best = best.lock().unwrap();
+                    if sample.error < best.error {
+                        *best = sample;
+                    }
+                });
+        } else {
+            (0..opt.num_samples).into_par_iter()
+                .for_each(|s| {
+                    debug!("Sample: {}", s);
 
-                let mut best = best.lock().unwrap();
-                if error < best.2 {
-                    best.0 = rect;
-                    best.1 = colour;
-                    best.2 = error;
-                }
-            });
+                    let sample = sample(
+                        &target,
+                        &target_integral,
+                        opt.num_attempts,
+                        current_error,
+                        &current_diff_integral_squared
+                    );
+
+                    let mut best = best.lock().unwrap();
+                    if sample.error < best.error {
+                        *best = sample;
+                    }
+                });
+        }
+
+
 
         let best = best.lock().unwrap();
-        current_image = draw_rect(&current_image, &best.0, best.1);
+        current_image = draw_rect(&current_image, &best.rect, best.colour);
     }
 
     current_image.save(&opt.output)?;
 
     Ok(())
+}
+
+#[derive(Copy, Clone, Debug)]
+struct Sample {
+    rect: Rect,
+    colour: Rgb<u8>,
+    error: u64
+}
+
+impl Default for Sample {
+    fn default() -> Self {
+        Sample {
+            rect: Rect::at(0, 0).of_size(1, 1),
+            colour: Rgb([0, 0, 0]),
+            error: std::u64::MAX
+        }
+    }
 }
 
 /// Returns the sum of squared errors after drawing the given
@@ -175,18 +205,17 @@ fn sum_squared_errors_after_drawing_rect(
     current_error - error_in_rect_before_drawing + error_in_rect_after_drawing
 }
 
-/// Returns (least error, best rect, best rect colour)
-fn hill_climb<R: Rng>(
-    rng: &mut R,
+fn sample(
     target: &RgbImage,
     target_integral: &Image<Rgb<u64>>,
     num_attempts: u64,
-    start: Rect,
     current_error: u64,
     current_diff_integral_squared: &Image<Rgb<u64>>
-) -> (u64, Rect, Rgb<u8>)
+) -> Sample
 {
+    let mut rng = thread_rng();
     let (width, height) = target.dimensions();
+    let rect = Rect::generate_random(&mut rng, width, height);
     let mut attempts = 0;
 
     let mut least_error = sum_squared_errors_after_drawing_rect(
@@ -194,15 +223,15 @@ fn hill_climb<R: Rng>(
         current_diff_integral_squared,
         target,
         target_integral,
-        &start
+        &rect
     );
     trace!("Starting error for hill climb: {}", least_error);
-    let mut best_rect = start;
+    let mut best_rect = rect;
 
     while attempts < num_attempts {
         trace!("Attempt: {}", attempts);
 
-        let mutated = best_rect.mutate(rng, width, height);
+        let mutated = best_rect.mutate(&mut rng, width, height);
         let error = sum_squared_errors_after_drawing_rect(
             current_error,
             current_diff_integral_squared,
@@ -221,8 +250,11 @@ fn hill_climb<R: Rng>(
         }
     }
 
-    let colour = average_colour_within_rect(target_integral, &best_rect);
-    (least_error, best_rect, colour)
+    Sample {
+        rect: best_rect,
+        colour: average_colour_within_rect(target_integral, &best_rect),
+        error: least_error
+    }
 }
 
 fn draw_rect(image: &RgbImage, rect: &Rect, colour: Rgb<u8>) -> RgbImage {
