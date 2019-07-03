@@ -336,8 +336,13 @@ impl Random for Rect {
         // 2. they generate uniformly in full range and then clamp
         let left = rng.gen_range(0, image_width - 1);
         let top = rng.gen_range(0, image_height - 1);
-        let width = rng.gen_range(1, image_width - left);
-        let height = rng.gen_range(1, image_width - top);
+        // The exact choice here doesn't particularly matter, but allowing larger
+        // values doesn't appear to help, and sum_squares_difference_from_average
+        // accounts for nearly the whole run time of this program and is quadratic in
+        // MAX_RECT_SIDE.
+        const MAX_RECT_SIDE: u32 = 50;
+        let width = rng.gen_range(1, cmp::min(image_width - left, MAX_RECT_SIDE));
+        let height = rng.gen_range(1, cmp::min(image_width - top, MAX_RECT_SIDE));
 
         Rect::at(left as i32, top as i32).of_size(width, height)
     }
