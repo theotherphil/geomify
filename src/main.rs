@@ -128,7 +128,7 @@ fn hill_climb<R: Rng>(
     let (width, height) = target.dimensions();
     let mut attempts = 0;
 
-    let rect_colour = average_colour_within_rect(&target, &start);
+    let rect_colour = average_colour_within_rect(&target_integral, &start);
     let candidate = draw_rect(current, &start, rect_colour);
     // Using draw_filled_rect increases the runtime of the following
     // from 1.82s to 5.3s:
@@ -143,7 +143,7 @@ fn hill_climb<R: Rng>(
         trace!("Attempt: {}", attempts);
 
         let mutated = best_rect.mutate(rng, width, height);
-        let rect_colour = average_colour_within_rect(&target, &mutated);
+        let rect_colour = average_colour_within_rect(&target_integral, &mutated);
         let candidate = draw_rect(current, &mutated, rect_colour);
         // See comment on using draw_rect above
         //let candidate = draw_filled_rect(current, mutated, rect_colour);
@@ -269,37 +269,16 @@ fn sum_squared_errors(target: &RgbImage, candidate: &RgbImage) -> u64 {
     sum
 }
 
-// fn average_colour_within_rect(integral_image: &Image<Rgb<u64>>, rect: &Rect) -> Rgb<u8> {
-//     // The bounds for sum_image_pixels are inclusive
-//     let mut avg = sum_image_pixels(
-//         integral_image,
-//         rect.left,
-//         rect.top,
-//         rect.left + rect.width - 1,
-//         rect.top + rect.height - 1
-//     );
-//     let count = rect.width as u64 * rect.height as u64;
-//     avg[0] /= count;
-//     avg[1] /= count;
-//     avg[2] /= count;
-//     Rgb([avg[0] as u8, avg[1] as u8, avg[2] as u8])
-// }
-
-fn average_colour_within_rect(image: &Image<Rgb<u8>>, rect: &Rect) -> Rgb<u8> {
-    let mut avg = [0u64, 0, 0];
-    if rect.width() == 0 || rect.height() == 0 {
-        return Rgb([avg[0] as u8, avg[1] as u8, avg[2] as u8]);
-    }
-    let mut count = 0u64;
-    for y in rect.top()..rect.bottom() + 1 {
-        for x in rect.left()..rect.right() + 1 {
-            let p = image.get_pixel(x as u32, y as u32);
-            avg[0] += p.data[0] as u64;
-            avg[1] += p.data[1] as u64;
-            avg[2] += p.data[2] as u64;
-            count += 1;
-        }
-    }
+fn average_colour_within_rect(integral_image: &Image<Rgb<u64>>, rect: &Rect) -> Rgb<u8> {
+    // The bounds for sum_image_pixels are inclusive
+    let mut avg = sum_image_pixels(
+        integral_image,
+        rect.left() as u32,
+        rect.top() as u32,
+        rect.left() as u32 + rect.width() - 1,
+        rect.top() as u32 + rect.height() - 1
+    );
+    let count = rect.width() as u64 * rect.height() as u64;
     avg[0] /= count;
     avg[1] /= count;
     avg[2] /= count;
