@@ -9,5 +9,6 @@ image = "0.21"
 imageproc = { git = "https://github.com/image-rs/imageproc" }
 log = "0.4.6"
 rand = "0.7"
+rayon = "1.1"
 simplelog = "0.6"
 structopt = "0.2"

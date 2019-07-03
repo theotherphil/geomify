@@ -9,11 +9,13 @@ use imageproc::{
     rect::Rect
 };
 use log::{info, debug, trace};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{Rng, thread_rng};
+use rayon::prelude::*;
 use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
 use std::cmp;
 use std::error::Error;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use structopt::StructOpt;
 
 #[derive(StructOpt, Debug)]
@@ -73,7 +75,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     info!("{:#?}", opt);
 
-    let target = image::open(opt.input)?.to_rgb();
+    let target = image::open(&opt.input)?.to_rgb();
     let (width, height) = target.dimensions();
     let target_integral = integral_image::<_, u64>(&target);
 
@@ -85,9 +87,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     let mut current_image = RgbImage::from_pixel(width, height, background);
-
-    // Totally deterministic for now.
-    let mut rng = StdRng::seed_from_u64(1);
 
     for n in 0..opt.num_shapes {
         info!("Shape: {}", n);
@@ -108,32 +107,41 @@ fn main() -> Result<(), Box<dyn Error>> {
             &Rect::at(0, 0).of_size(target.width(), target.height())
         ).iter().sum();
 
-        let mut best_rect = Rect::at(0, 0).of_size(1, 1);
-        let mut best_rect_colour = Rgb([0, 0, 0]);
-        let mut least_error = std::u64::MAX;
+        let best = Mutex::new(
+            (
+                Rect::at(0, 0).of_size(1, 1),
+                Rgb([0, 0, 0]),
+                std::u64::MAX
+            )
+        );
 
-        for s in 0..opt.num_samples {
-            debug!("Sample: {}", s);
+        (0..opt.num_samples).into_par_iter()
+            .for_each(|s| {
+                debug!("Sample: {}", s);
 
-            let rect = Rect::generate_random(&mut rng, width, height);
-            let (error, rect, colour) = hill_climb(
-                &mut rng,
-                &target,
-                &target_integral,
-                opt.num_attempts,
-                rect,
-                current_error,
-                &current_diff_integral_squared
-            );
+                let mut rng = thread_rng();
 
-            if error < least_error {
-                least_error = error;
-                best_rect = rect;
-                best_rect_colour = colour;
-            }
-        }
+                let rect = Rect::generate_random(&mut rng, width, height);
+                let (error, rect, colour) = hill_climb(
+                    &mut rng,
+                    &target,
+                    &target_integral,
+                    opt.num_attempts,
+                    rect,
+                    current_error,
+                    &current_diff_integral_squared
+                );
 
-        current_image = draw_rect(&current_image, &best_rect, best_rect_colour);
+                let mut best = best.lock().unwrap();
+                if error < best.2 {
+                    best.0 = rect;
+                    best.1 = colour;
+                    best.2 = error;
+                }
+            });
+
+        let best = best.lock().unwrap();
+        current_image = draw_rect(&current_image, &best.0, best.1);
     }
 
     current_image.save(&opt.output)?;
