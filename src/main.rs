@@ -57,12 +57,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         1 => LevelFilter::Debug,
         _ => LevelFilter::Trace
     };
-
-    let _ = TermLogger::init(
-        level_filter,
-        Config::default(),
-        TerminalMode::Mixed
-    );
+    let config = Config {
+        location: None,
+        .. Default::default()
+    };
+    let _ = TermLogger::init(level_filter, config, TerminalMode::Mixed);
 
     info!("{:#?}", opt);
 
