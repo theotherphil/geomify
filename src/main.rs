@@ -2,8 +2,10 @@
 
 use image::{Rgb, RgbImage};
 use imageproc::{
+    drawing::draw_filled_rect,
     definitions::Image,
-    integral_image::{integral_image, sum_image_pixels}
+    integral_image::{integral_image, sum_image_pixels},
+    rect::Rect
 };
 use log::{info, debug, trace};
 use rand::{Rng, SeedableRng, rngs::StdRng};
@@ -127,7 +129,11 @@ fn hill_climb<R: Rng>(
     let mut attempts = 0;
 
     let rect_colour = average_colour_within_rect(&target, &start);
-    let candidate = draw_rect(&current, &start, rect_colour);
+    let candidate = draw_rect(current, &start, rect_colour);
+    // Using draw_filled_rect increases the runtime of the following
+    // from 1.82s to 5.3s:
+    // time cargo run --release -- -i ../mona_lisa.png -n 10 -a 2 -s 50 -o ../result.png
+    //let candidate = draw_filled_rect(current, start, rect_colour);
 
     let mut least_error = sum_squared_errors(&target, &candidate);
     let mut best_candidate = candidate;
@@ -138,7 +144,9 @@ fn hill_climb<R: Rng>(
 
         let mutated = best_rect.mutate(rng, width, height);
         let rect_colour = average_colour_within_rect(&target, &mutated);
-        let candidate = draw_rect(&current, &mutated, rect_colour);
+        let candidate = draw_rect(current, &mutated, rect_colour);
+        // See comment on using draw_rect above
+        //let candidate = draw_filled_rect(current, mutated, rect_colour);
         let error = sum_squared_errors(&target, &candidate);
 
         if error < least_error {
@@ -161,8 +169,8 @@ fn draw_rect(image: &RgbImage, rect: &Rect, colour: Rgb<u8>) -> RgbImage {
     // We could also replace a load of code here by using functions
     // from image or imageproc.
     let mut result = image.clone();
-    for y in rect.top..(rect.top + rect.height) {
-        for x in rect.left..(rect.left + rect.width) {
+    for y in rect.top() as u32..(rect.top() as u32 + rect.height()) {
+        for x in rect.left() as u32..(rect.left() as u32 + rect.width()) {
             result.put_pixel(x, y, colour);
         }
     }
@@ -193,28 +201,28 @@ impl Mutate for Rect {
         );
         let (left, top, width, height) = if choice == 0 {
             (
-                self.left as i32 + c1,
-                self.top as i32 + c2,
-                self.width as i32,
-                self.height as i32
+                self.left() + c1,
+                self.top() + c2,
+                self.width() as i32,
+                self.height() as i32
             )
         } else {
             (
-                self.left as i32,
-                self.top as i32,
-                self.width as i32 + c1,
-                self.height as i32 + c2
+                self.left(),
+                self.top(),
+                self.width() as i32 + c1,
+                self.height() as i32 + c2
             )
         };
 
         let (w, h) = (image_width as i32, image_height as i32);
 
-        let left = clamp(left, 0, w - 2) as u32;
-        let top = clamp(top, 0, h - 2) as u32;
-        let width = clamp(width, 1, w - left as i32 - 1) as u32;
-        let height = clamp(height, 1, h - top as i32 - 1) as u32;
+        let left = clamp(left, 0, w - 2);
+        let top = clamp(top, 0, h - 2);
+        let width = clamp(width, 1, w - left as i32 - 1);
+        let height = clamp(height, 1, h - top as i32 - 1);
 
-        Rect { left, top, width, height }
+        Rect::at(left, top).of_size(width as u32, height as u32)
     }
 }
 
@@ -241,16 +249,8 @@ impl Random for Rect {
         let width = rng.gen_range(1, image_width - left);
         let height = rng.gen_range(1, image_width - top);
 
-        Rect { left, top, width, height }
+        Rect::at(left as i32, top as i32).of_size(width, height)
     }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct Rect {
-    left: u32,
-    top: u32,
-    width: u32,
-    height: u32,
 }
 
 fn sum_squared_errors(target: &RgbImage, candidate: &RgbImage) -> u64 {
@@ -292,13 +292,13 @@ fn sum_squared_errors(target: &RgbImage, candidate: &RgbImage) -> u64 {
 
 fn average_colour_within_rect(image: &Image<Rgb<u8>>, rect: &Rect) -> Rgb<u8> {
     let mut avg = [0u64, 0, 0];
-    if rect.width == 0 || rect.height == 0 {
+    if rect.width() == 0 || rect.height() == 0 {
         return Rgb([avg[0] as u8, avg[1] as u8, avg[2] as u8]);
     }
     let mut count = 0u64;
-    for y in rect.top..(rect.top + rect.height) {
-        for x in rect.left..(rect.left + rect.width) {
-            let p = image.get_pixel(x, y);
+    for y in rect.top()..rect.bottom() + 1 {
+        for x in rect.left()..rect.right() + 1 {
+            let p = image.get_pixel(x as u32, y as u32);
             avg[0] += p.data[0] as u64;
             avg[1] += p.data[1] as u64;
             avg[2] += p.data[2] as u64;
