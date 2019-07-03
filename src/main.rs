@@ -2,7 +2,7 @@
 
 use image::{Rgb, RgbImage};
 use imageproc::{
-    drawing::draw_filled_rect,
+    drawing::draw_filled_rect_mut,
     definitions::Image,
     integral_image::{integral_image, sum_image_pixels},
     rect::Rect
@@ -163,18 +163,13 @@ fn hill_climb<R: Rng>(
 }
 
 fn draw_rect(image: &RgbImage, rect: &Rect, colour: Rgb<u8>) -> RgbImage {
-    // Shouldn't allocate every time here, but not worrying at
-    // all about performance for now.
-    //
-    // We could also replace a load of code here by using functions
-    // from image or imageproc.
+    // This is a bit sad. draw_filled_rect in imageproc allocates a
+    // fresh output image and calls GenericImage::copy_from to populate
+    // it. This performs elementwise copies, because the impl is for any
+    // GenericImage and can't be specialised for when the input is actually
+    // an ImageBuffer.
     let mut result = image.clone();
-    for y in rect.top() as u32..(rect.top() as u32 + rect.height()) {
-        for x in rect.left() as u32..(rect.left() as u32 + rect.width()) {
-            result.put_pixel(x, y, colour);
-        }
-    }
-
+    draw_filled_rect_mut(&mut result, *rect, colour);
     result
 }
 
