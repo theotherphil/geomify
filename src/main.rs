@@ -1,6 +1,10 @@
 //! Based on https://github.com/fogleman/primitive
 
 use image::{Rgb, RgbImage};
+use imageproc::{
+    definitions::Image,
+    integral_image::{integral_image, sum_image_pixels}
+};
 use log::{info, debug, trace};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
@@ -65,12 +69,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     info!("{:#?}", opt);
 
-    let image = image::open(opt.input)?.to_rgb();
-    let (width, height) = image.dimensions();
+    let target = image::open(opt.input)?.to_rgb();
+    let (width, height) = target.dimensions();
+    let target_integral = integral_image::<_, u64>(&target);
 
     info!("Input size: ({}, {})", width, height);
 
-    let background = average_image_colour(&image);
+    let background = average_image_colour(&target);
     let mut current_image = RgbImage::from_pixel(width, height, background);
 
     // Totally deterministic for now.
@@ -88,7 +93,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             let rect = Rect::generate_random(&mut rng, width, height);
             let (error, candidate) = hill_climb(
                 &mut rng,
-                &image,
+                &target,
+                &target_integral,
                 &current_image,
                 opt.num_attempts,
                 rect);
@@ -111,6 +117,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn hill_climb<R: Rng>(
     rng: &mut R,
     target: &RgbImage,
+    target_integral: &Image<Rgb<u64>>,
     current: &RgbImage,
     num_attempts: u64,
     start: Rect
@@ -267,9 +274,23 @@ fn sum_squared_errors(target: &RgbImage, candidate: &RgbImage) -> u64 {
     sum
 }
 
-/// We should use integral images here instead. Won't work for
-/// non-rectangular shapes, but will make a big different for rects.
-fn average_colour_within_rect(image: &RgbImage, rect: &Rect) -> Rgb<u8> {
+// fn average_colour_within_rect(integral_image: &Image<Rgb<u64>>, rect: &Rect) -> Rgb<u8> {
+//     // The bounds for sum_image_pixels are inclusive
+//     let mut avg = sum_image_pixels(
+//         integral_image,
+//         rect.left,
+//         rect.top,
+//         rect.left + rect.width - 1,
+//         rect.top + rect.height - 1
+//     );
+//     let count = rect.width as u64 * rect.height as u64;
+//     avg[0] /= count;
+//     avg[1] /= count;
+//     avg[2] /= count;
+//     Rgb([avg[0] as u8, avg[1] as u8, avg[2] as u8])
+// }
+
+fn average_colour_within_rect(image: &Image<Rgb<u8>>, rect: &Rect) -> Rgb<u8> {
     let mut avg = [0u64, 0, 0];
     if rect.width == 0 || rect.height == 0 {
         return Rgb([avg[0] as u8, avg[1] as u8, avg[2] as u8]);
