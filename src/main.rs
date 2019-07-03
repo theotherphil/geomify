@@ -92,7 +92,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     for n in 0..opt.num_shapes {
         info!("Shape: {}", n);
 
-        let current_error = sum_squared_errors(&target, &current_image);
         let current_diff = map_colors2(
             &target,
             &current_image,
@@ -103,6 +102,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             ])
         );
         let current_diff_integral_squared = integral_squared_image::<_, u64>(&current_diff);
+
+        let current_error = sum_image_pixels_within_rect(
+            &current_diff_integral_squared,
+            &Rect::at(0, 0).of_size(target.width(), target.height())
+        ).iter().sum();
 
         let mut best_rect = Rect::at(0, 0).of_size(1, 1);
         let mut best_rect_colour = Rgb([0, 0, 0]);
@@ -116,7 +120,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &mut rng,
                 &target,
                 &target_integral,
-                &current_image,
                 opt.num_attempts,
                 rect,
                 current_error,
@@ -159,7 +162,6 @@ fn sum_squared_errors_after_drawing_rect(
     );
     let error_in_rect_before_drawing: u64 = channel_errors_in_rect_before_drawing
         .iter()
-        .map(|c| c * c)
         .sum();
 
     current_error - error_in_rect_before_drawing + error_in_rect_after_drawing
@@ -170,7 +172,6 @@ fn hill_climb<R: Rng>(
     rng: &mut R,
     target: &RgbImage,
     target_integral: &Image<Rgb<u64>>,
-    current: &RgbImage,
     num_attempts: u64,
     start: Rect,
     current_error: u64,
@@ -187,6 +188,7 @@ fn hill_climb<R: Rng>(
         target_integral,
         &start
     );
+    trace!("Starting error for hill climb: {}", least_error);
     let mut best_rect = start;
 
     while attempts < num_attempts {
@@ -202,6 +204,7 @@ fn hill_climb<R: Rng>(
         );
 
         if error < least_error {
+            trace!("Improved error for hill climb: {}", error);
             attempts = 0;
             least_error = error;
             best_rect = mutated;
@@ -329,27 +332,6 @@ fn sum_squares_difference_from_average(
     }
 
     sum_sq
-}
-
-fn sum_squared_errors(target: &RgbImage, candidate: &RgbImage) -> u64 {
-    assert!(target.dimensions() == candidate.dimensions());
-    let mut sum = 0u64;
-    for y in 0..target.height() {
-        for x in 0..target.width() {
-            let t = target.get_pixel(x, y).data;
-            let c = candidate.get_pixel(x, y).data;
-
-            let (dr, dg, db) = (
-                t[0] as i32 - c[0] as i32,
-                t[1] as i32 - c[1] as i32,
-                t[2] as i32 - c[2] as i32
-            );
-            sum += (dr * dr) as u64
-                + (dg * dg) as u64
-                + (db * db) as u64;
-        }
-    }
-    sum
 }
 
 fn sum_image_pixels_within_rect(integral_image: &Image<Rgb<u64>>, rect: &Rect) -> [u64; 3] {
