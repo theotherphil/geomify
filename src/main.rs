@@ -1,7 +1,9 @@
 //! Based on https://github.com/fogleman/primitive
 
 use image::{Rgb, RgbImage};
+use log::{info, debug, trace};
 use rand::{Rng, SeedableRng, rngs::StdRng};
+use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
 use std::error::Error;
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -30,13 +32,17 @@ struct Opt {
     /// via mutation before giving up.
     #[structopt(short = "a", long, default_value = "10")]
     num_attempts: u64,
+
+    /// Verbosity of logging.
+    #[structopt(short = "v", parse(from_occurrences))]
+    verbosity: u64,
 }
 
 // TODO
 // alpha
 // more shapes
 // hill climbing
-// logging/intermediate results
+// better logging/intermediate results
 // non-deterministic seeding
 // svg output
 // whatever else the go version does that's useful
@@ -45,12 +51,25 @@ struct Opt {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let opt = Opt::from_args();
-    println!("{:#?}", opt);
+
+    let level_filter = match opt.verbosity {
+        0 => LevelFilter::Info,
+        1 => LevelFilter::Debug,
+        _ => LevelFilter::Trace
+    };
+
+    let _ = TermLogger::init(
+        level_filter,
+        Config::default(),
+        TerminalMode::Mixed
+    );
+
+    info!("{:#?}", opt);
 
     let image = image::open(opt.input)?.to_rgb();
     let (width, height) = image.dimensions();
 
-    println!("Input size: ({}, {})", width, height);
+    info!("Input size: ({}, {})", width, height);
 
     let background = average_image_colour(&image);
     let mut current_image = RgbImage::from_pixel(width, height, background);
@@ -59,12 +78,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut rng = StdRng::seed_from_u64(1);
 
     for n in 0..opt.num_shapes {
-        println!("Shape: {}", n);
+        info!("Shape: {}", n);
 
         let mut best_candidate = current_image.clone();
         let mut least_error = std::u64::MAX;
 
-        for _ in 0..opt.num_samples {
+        for s in 0..opt.num_samples {
+            debug!("Sample: {}", s);
+
             let rect = Rect::generate_random(&mut rng, width, height);
             let (error, candidate) = hill_climb(
                 &mut rng,
@@ -107,6 +128,8 @@ fn hill_climb<R: Rng>(
     let mut best_rect = start;
 
     while attempts < num_attempts {
+        trace!("Attempt: {}", attempts);
+
         let mutated = best_rect.mutate(rng, width, height);
         let rect_colour = average_colour_within_rect(&target, &mutated);
         let candidate = draw_rect(&current, &mutated, rect_colour);
