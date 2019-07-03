@@ -4,12 +4,14 @@ use image::{Rgb, RgbImage};
 use imageproc::{
     drawing::draw_filled_rect_mut,
     definitions::Image,
-    integral_image::{integral_image, sum_image_pixels},
+    integral_image::{integral_image, integral_squared_image, sum_image_pixels},
+    map::map_colors2,
     rect::Rect
 };
 use log::{info, debug, trace};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use simplelog::{TermLogger, LevelFilter, Config, TerminalMode};
+use std::cmp;
 use std::error::Error;
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -77,7 +79,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     info!("Input size: ({}, {})", width, height);
 
-    let background = average_image_colour(&target);
+    let background = average_colour_within_rect(
+        &target_integral,
+        &Rect::at(0, 0).of_size(target.width(), target.height())
+    );
+
     let mut current_image = RgbImage::from_pixel(width, height, background);
 
     // Totally deterministic for now.
@@ -86,28 +92,45 @@ fn main() -> Result<(), Box<dyn Error>> {
     for n in 0..opt.num_shapes {
         info!("Shape: {}", n);
 
-        let mut best_candidate = current_image.clone();
+        let current_error = sum_squared_errors(&target, &current_image);
+        let current_diff = map_colors2(
+            &target,
+            &current_image,
+            |p, q| Rgb([
+                cmp::max(p[0], q[0]) - cmp::min(p[0], q[0]),
+                cmp::max(p[1], q[1]) - cmp::min(p[1], q[1]),
+                cmp::max(p[2], q[2]) - cmp::min(p[2], q[2])
+            ])
+        );
+        let current_diff_integral_squared = integral_squared_image::<_, u64>(&current_diff);
+
+        let mut best_rect = Rect::at(0, 0).of_size(1, 1);
+        let mut best_rect_colour = Rgb([0, 0, 0]);
         let mut least_error = std::u64::MAX;
 
         for s in 0..opt.num_samples {
             debug!("Sample: {}", s);
 
             let rect = Rect::generate_random(&mut rng, width, height);
-            let (error, candidate) = hill_climb(
+            let (error, rect, colour) = hill_climb(
                 &mut rng,
                 &target,
                 &target_integral,
                 &current_image,
                 opt.num_attempts,
-                rect);
+                rect,
+                current_error,
+                &current_diff_integral_squared
+            );
 
             if error < least_error {
                 least_error = error;
-                best_candidate = candidate;
+                best_rect = rect;
+                best_rect_colour = colour;
             }
         }
 
-        current_image = best_candidate;
+        current_image = draw_rect(&current_image, &best_rect, best_rect_colour);
     }
 
     current_image.save(&opt.output)?;
@@ -115,51 +138,80 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Returns (least error, image with best rect added)
+/// Returns the sum of squared errors after drawing the given
+/// rectangle on the current image with colour equal to the
+/// average colour of the target image in that rectangle.
+fn sum_squared_errors_after_drawing_rect(
+    current_error: u64,
+    current_diff_integral_squared: &Image<Rgb<u64>>,
+    target: &RgbImage,
+    target_integral: &Image<Rgb<u64>>,
+    rect: &Rect
+) -> u64 {
+    let error_in_rect_after_drawing = sum_squares_difference_from_average(
+        target,
+        target_integral,
+        rect
+    );
+    let channel_errors_in_rect_before_drawing = sum_image_pixels_within_rect(
+        current_diff_integral_squared,
+        rect
+    );
+    let error_in_rect_before_drawing: u64 = channel_errors_in_rect_before_drawing
+        .iter()
+        .map(|c| c * c)
+        .sum();
+
+    current_error - error_in_rect_before_drawing + error_in_rect_after_drawing
+}
+
+/// Returns (least error, best rect, best rect colour)
 fn hill_climb<R: Rng>(
     rng: &mut R,
     target: &RgbImage,
     target_integral: &Image<Rgb<u64>>,
     current: &RgbImage,
     num_attempts: u64,
-    start: Rect
-) -> (u64, RgbImage)
+    start: Rect,
+    current_error: u64,
+    current_diff_integral_squared: &Image<Rgb<u64>>
+) -> (u64, Rect, Rgb<u8>)
 {
     let (width, height) = target.dimensions();
     let mut attempts = 0;
 
-    let rect_colour = average_colour_within_rect(&target_integral, &start);
-    let candidate = draw_rect(current, &start, rect_colour);
-    // Using draw_filled_rect increases the runtime of the following
-    // from 1.82s to 5.3s:
-    // time cargo run --release -- -i ../mona_lisa.png -n 10 -a 2 -s 50 -o ../result.png
-    //let candidate = draw_filled_rect(current, start, rect_colour);
-
-    let mut least_error = sum_squared_errors(&target, &candidate);
-    let mut best_candidate = candidate;
+    let mut least_error = sum_squared_errors_after_drawing_rect(
+        current_error,
+        current_diff_integral_squared,
+        target,
+        target_integral,
+        &start
+    );
     let mut best_rect = start;
 
     while attempts < num_attempts {
         trace!("Attempt: {}", attempts);
 
         let mutated = best_rect.mutate(rng, width, height);
-        let rect_colour = average_colour_within_rect(&target_integral, &mutated);
-        let candidate = draw_rect(current, &mutated, rect_colour);
-        // See comment on using draw_rect above
-        //let candidate = draw_filled_rect(current, mutated, rect_colour);
-        let error = sum_squared_errors(&target, &candidate);
+        let error = sum_squared_errors_after_drawing_rect(
+            current_error,
+            current_diff_integral_squared,
+            target,
+            target_integral,
+            &mutated
+        );
 
         if error < least_error {
             attempts = 0;
             least_error = error;
             best_rect = mutated;
-            best_candidate = candidate;
         } else {
             attempts += 1;
         }
     }
 
-    (least_error, best_candidate)
+    let colour = average_colour_within_rect(target_integral, &best_rect);
+    (least_error, best_rect, colour)
 }
 
 fn draw_rect(image: &RgbImage, rect: &Rect, colour: Rgb<u8>) -> RgbImage {
@@ -248,6 +300,37 @@ impl Random for Rect {
     }
 }
 
+/// Computes the average image colour in the provided rectangle, and returns the
+/// sum over the pixels in the rectangle of the square of the differences between
+/// the actual and average pixel values.
+fn sum_squares_difference_from_average(
+    image: &RgbImage,
+    integral_image: &Image<Rgb<u64>>, rect: &Rect
+) -> u64 {
+    let avg = average_colour_within_rect(integral_image, rect);
+
+    if rect.width() == 0 || rect.height() == 0 {
+        return 0;
+    }
+
+    let mut sum_sq = 0;
+    for y in rect.top()..rect.bottom() + 1 {
+        for x in rect.left()..rect.right() + 1 {
+            let p = image.get_pixel(x as u32, y as u32);
+            let (dr, dg, db) = (
+                p[0] as i32 - avg[0] as i32,
+                p[1] as i32 - avg[1] as i32,
+                p[2] as i32 - avg[2] as i32
+            );
+            sum_sq += (dr * dr) as u64
+                    + (dg * dg) as u64
+                    + (db * db) as u64;
+        }
+    }
+
+    sum_sq
+}
+
 fn sum_squared_errors(target: &RgbImage, candidate: &RgbImage) -> u64 {
     assert!(target.dimensions() == candidate.dimensions());
     let mut sum = 0u64;
@@ -269,31 +352,20 @@ fn sum_squared_errors(target: &RgbImage, candidate: &RgbImage) -> u64 {
     sum
 }
 
-fn average_colour_within_rect(integral_image: &Image<Rgb<u64>>, rect: &Rect) -> Rgb<u8> {
+fn sum_image_pixels_within_rect(integral_image: &Image<Rgb<u64>>, rect: &Rect) -> [u64; 3] {
     // The bounds for sum_image_pixels are inclusive
-    let mut avg = sum_image_pixels(
+    sum_image_pixels(
         integral_image,
         rect.left() as u32,
         rect.top() as u32,
         rect.left() as u32 + rect.width() - 1,
         rect.top() as u32 + rect.height() - 1
-    );
-    let count = rect.width() as u64 * rect.height() as u64;
-    avg[0] /= count;
-    avg[1] /= count;
-    avg[2] /= count;
-    Rgb([avg[0] as u8, avg[1] as u8, avg[2] as u8])
+    )
 }
 
-fn average_image_colour(image: &RgbImage) -> Rgb<u8> {
-    let mut avg = [0u64, 0, 0];
-    let mut count = 0u64;
-    for p in image.pixels() {
-        avg[0] += p.data[0] as u64;
-        avg[1] += p.data[1] as u64;
-        avg[2] += p.data[2] as u64;
-        count += 1;
-    }
+fn average_colour_within_rect(integral_image: &Image<Rgb<u64>>, rect: &Rect) -> Rgb<u8> {
+    let mut avg = sum_image_pixels_within_rect(integral_image, rect);
+    let count = rect.width() as u64 * rect.height() as u64;
     avg[0] /= count;
     avg[1] /= count;
     avg[2] /= count;
